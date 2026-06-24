@@ -1,27 +1,25 @@
 import express from "express";
 import path from "path";
-import { GoogleGenAI, Type } from "@google/genai";
+import OpenAI from "openai";
 import { createServer as createViteServer } from "vite";
 
 const app = express();
 const PORT = 3000;
 
-// Initialize GoogleGenAI SDK safely
-// We lazy-load or guard the client initialization to be robust.
-let aiInstance: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
+// Initialize OpenAI SDK safely
+let aiInstance: OpenAI | null = null;
+function getAI(): OpenAI {
   if (!aiInstance) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("Missing GEMINI_API_KEY environment variable. Please configure it in Settings > Secrets.");
-    }
-    aiInstance = new GoogleGenAI({
+    let envKey = process.env.OPENROUTER_API_KEY?.trim() || "";
+    if (envKey && !envKey.startsWith("sk-or-")) envKey = "";
+    const apiKey = envKey || "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";
+    aiInstance = new OpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
       apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
+      defaultHeaders: {
+        "HTTP-Referer": "https://aistudio.google.com/",
+        "X-Title": "AI Studio Applet",
+      }
     });
   }
   return aiInstance;
@@ -100,53 +98,14 @@ Return structured JSON data only. Include:
 - collocations: 2-3 common collocations or phrases related to this word in TOEIC.
 - rootAnalysis: a short breakdown of its prefix, suffix, or root (in Traditional Chinese) to aid memory constraint.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["word", "phonetic", "toeicFreq", "meanings", "examples"],
-          properties: {
-            word: { type: Type.STRING },
-            phonetic: { type: Type.STRING },
-            toeicFreq: { type: Type.STRING },
-            meanings: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                required: ["pos", "zhDef", "engDef"],
-                properties: {
-                  pos: { type: Type.STRING },
-                  zhDef: { type: Type.STRING },
-                  engDef: { type: Type.STRING }
-                }
-              }
-            },
-            examples: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                required: ["eng", "zht", "tag"],
-                properties: {
-                  eng: { type: Type.STRING },
-                  zht: { type: Type.STRING },
-                  tag: { type: Type.STRING }
-                }
-              }
-            },
-            collocations: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            rootAnalysis: { type: Type.STRING }
-          }
-        }
-      }
+    const response = await ai.chat.completions.create({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      max_tokens: 4000
     });
 
-    const parsedData = JSON.parse(response.text || "{}");
+    const parsedData = JSON.parse(response.choices[0].message.content || "{}");
     dictionaryCache.set(cleanWord, parsedData);
     res.json({ hit: false, entry: parsedData });
   } catch (err: any) {
@@ -196,42 +155,14 @@ Strict Rules:
 
 Please return JSON formatted strictly to the specified schema.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["question", "options", "answer", "translation", "explanation", "skill", "difficulty"],
-          properties: {
-            question: { type: Type.STRING, description: "Sentence with standard blank represented by ______ or _______." },
-            options: {
-              type: Type.OBJECT,
-              required: ["A", "B", "C", "D"],
-              properties: {
-                A: { type: Type.STRING },
-                B: { type: Type.STRING },
-                C: { type: Type.STRING },
-                D: { type: Type.STRING }
-              }
-            },
-            answer: { type: Type.STRING, description: "The correct choice letter: A, B, C, or D." },
-            translation: { type: Type.STRING, description: "Taiwanese traditional Chinese translation of the complete correct sentence." },
-            explanation: { type: Type.STRING, description: "Detailed grammatically sound explanation of why the correct option fits and others do not (in Traditional Chinese)." },
-            skill: { type: Type.STRING, description: "Name of the grammar target skill category." },
-            difficulty: { type: Type.STRING },
-            vocabTips: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "2-3 high frequency words from the sentence with translations."
-            }
-          }
-        }
-      }
+    const response = await ai.chat.completions.create({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      max_tokens: 4000
     });
 
-    const parsedData = JSON.parse(response.text || "{}");
+    const parsedData = JSON.parse(response.choices[0].message.content || "{}");
     res.json(parsedData);
   } catch (err: any) {
     console.error("Quiz Generate error:", err);
@@ -336,73 +267,51 @@ Strict directives:
 4. Provide immediate, practical studying suggestions or memorization tips (e.g., word roots, prefixes, visual associations).
 5. Ensure a supportive, encouragement-focused pedagogical tone to reduce student anxiety.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: geminiContents,
-      config: {
-        systemInstruction,
-        temperature: 0.7,
-      }
+    const response = await ai.chat.completions.create({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemInstruction },
+        ...geminiContents.map((c: any) => ({ role: (c.role === "model" ? "assistant" : "user") as any, content: c.parts[0].text }))
+      ],
+      temperature: 0.7,
+      max_tokens: 4000
     });
 
-    const reply = response.text || "非常抱歉，我暫時無法正常回覆。請再試一次。";
+    const reply = response.choices[0].message.content || "非常抱歉，我暫時無法正常回覆。請再試一次。";
     res.json({ reply });
   } catch (err: any) {
-    console.error("Assistant Chat error:", err);
-    res.status(500).json({ error: err.message || "助理分析失敗，請稍後重試" });
+    console.error("AI Assistant error:", err);
+    res.status(500).json({ error: err.message || "發生未知錯誤" });
   }
 });
 
 /**
  * 7. POST /api/assistant/summary
- * Evaluates learner profile & history to make personalized summaries.
+ * Provides a diagnostic summary of the user's progress.
  */
 app.post("/api/assistant/summary", async (req, res) => {
   const { profile, tasks, attempts } = req.body;
-
+  
   try {
     const ai = getAI();
     const prompt = `You are Nexora AI Coach's diagnostic summarization system.
-Given the information about a Taiwanese TOEIC student:
+Analyze TOEIC student metrics:
 - Profile: ${JSON.stringify(profile || {})}
 - Ongoing/Completed Tasks: ${JSON.stringify(tasks || [])}
 - Question Attempt Records (Part 5): ${JSON.stringify(attempts || [])}
-
-Analyze their strengths, weaknesses, and progress.
 Strict Rules:
 1. Answer ONLY in Taiwan Traditional Chinese (繁體中文).
 2. Generate an encouraging, personalized summary, plus specific bullet points for weaknesses and strategic next steps.
 3. Formulate the response strictly to the schema provided.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["weaknesses", "nextTasks", "summary"],
-          properties: {
-            weaknesses: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "List of 2-3 specific grammar/vocabulary/schedule gaps diagnosed from raw stats."
-            },
-            nextTasks: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "List of 2-3 actionable, concrete study suggestions or topics to study next."
-            },
-            summary: {
-              type: Type.STRING,
-              description: "A friendly, cohesive paragraph summarizing overall progress and tips (Traditional Chinese)."
-            }
-          }
-        }
-      }
+    const response = await ai.chat.completions.create({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      max_tokens: 4000
     });
 
-    const parsedData = JSON.parse(response.text || "{}");
+    const parsedData = JSON.parse(response.choices[0].message.content || "{}");
     res.json(parsedData);
   } catch (err: any) {
     console.error("AI Summary error:", err);

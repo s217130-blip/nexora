@@ -75,7 +75,7 @@ async function saveAttempts(env, attempts) {
 }
 // REST helper for Gemini Content Generation API
 async function generateGeminiContent(apiKey, body) {
-    const model = "gemini-3.5-flash"; // Aligning with developer server model
+    const model = "gemini-2.0-flash"; // Aligning with developer server model
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
         method: "POST",
