@@ -5,5 +5,6 @@ async function run() {
     body: JSON.stringify({ word: "apple" })
   });
   console.log(res.status, await res.text());
+  console.log(Object.fromEntries(res.headers));
 }
 run();
